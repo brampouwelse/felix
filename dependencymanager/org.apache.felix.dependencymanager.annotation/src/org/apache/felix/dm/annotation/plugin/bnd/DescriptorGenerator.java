@@ -104,7 +104,7 @@ public class DescriptorGenerator
             
         for (Clazz c : expanded)
         {
-            AnnotationCollector reader = new AnnotationCollector(m_logger, metaType);
+            AnnotationCollector reader = new AnnotationCollector(m_logger, m_analyzer, metaType);
             reader.baseClass(true);
             m_logger.debug("scanning class %s", c.getClassName());
             c.parseClassFileWithCollector(reader);

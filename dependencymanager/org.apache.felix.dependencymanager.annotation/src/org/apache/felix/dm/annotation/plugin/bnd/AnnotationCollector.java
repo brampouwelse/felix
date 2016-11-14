@@ -54,9 +54,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.osgi.framework.Bundle;
 
+import aQute.bnd.osgi.Analyzer;
 import aQute.bnd.osgi.Annotation;
 import aQute.bnd.osgi.ClassDataCollector;
 import aQute.bnd.osgi.Clazz;
+import aQute.bnd.osgi.Clazz.MethodDef;
 import aQute.bnd.osgi.Descriptors.TypeRef;
 import aQute.bnd.osgi.Verifier;
 
@@ -69,6 +71,95 @@ import aQute.bnd.osgi.Verifier;
  */
 public class AnnotationCollector extends ClassDataCollector
 {
+
+    private static class ComponentProperty {
+        private final String name;
+        private final Object value;
+        private final Class<?> classType;
+
+        public ComponentProperty(String name, Object value, Class<?> classType) {
+            this.name = name;
+            this.value = value;
+            this.classType = classType;
+        }
+
+    }
+
+    private final class MetaAnnotationCollector extends ClassDataCollector {
+
+        private MethodDef m_method;
+        private Annotation m_annotation;
+
+        public MetaAnnotationCollector(Annotation annotation) {
+            m_annotation = annotation;
+        }
+
+        @Override
+        public void method(MethodDef method) {
+            m_method = method;
+        }
+
+        @Override
+        public void annotation(Annotation metaAnnotation) {
+            String name = metaAnnotation.getName().getFQN();
+            if (name.equals(A_PROPERTY)) {
+                parseMetaProperty(metaAnnotation);
+            }
+        }
+
+        private void parseMetaProperty(Annotation metaAnnotation) {
+            if (!metaAnnotation.getName().getFQN().equals(Property.class.getName())) {
+                return;
+            }
+
+            String propertyName = metaAnnotation.get("name");
+
+            String type = m_method.getGenericReturnType();
+            if (metaAnnotation.getName().getFQN().equals(Property.class.getName())) {
+                m_logger.debug("Test [%s=%s]: %s", propertyName, m_annotation.get(m_method.getName()), type);
+            }
+
+            boolean isArrayType = type.endsWith("[]");
+            Object[] values;
+            if (isArrayType) {
+                type = type.substring(0, type.length() -2);
+                values = m_annotation.get(m_method.getName());
+            } else {
+                values = new Object[]{ m_annotation.get(m_method.getName())};
+            }
+
+            Class<?> classType;
+            switch (type) {
+            case "int":
+            case "short":
+                classType = Integer.class;
+                break;
+            case "float":
+                classType = Float.class;
+                break;
+            case "double":
+                classType = Double.class;
+                break;
+            case "boolean":
+                classType = Boolean.class;
+                break;
+            default:
+                try{
+                    classType = Class.forName(type);
+                } catch (ClassNotFoundException e) {
+                    // Theorically impossible
+                    throw new IllegalArgumentException("Invalid Property type " + type + " from annotation "
+                        + propertyName + " in class " + m_componentClassName);
+                }
+                break;
+            }
+
+            values = checkPropertyType(propertyName, classType, values);
+            ComponentProperty e = new ComponentProperty(propertyName, values, classType);
+            m_componentProperties.add(e);
+        }
+    }
+
     private final static String A_INIT = Init.class.getName();
     private final static String A_START = Start.class.getName();
     private final static String A_STOP = Stop.class.getName();
@@ -93,6 +184,7 @@ public class AnnotationCollector extends ClassDataCollector
     private final static String A_UNREGISTERED = Unregistered.class.getName();
 
     private Logger m_logger;
+    private Analyzer m_analyzer;
     private String[] m_interfaces;
     private boolean m_isField;
     private String m_field;
@@ -149,6 +241,10 @@ public class AnnotationCollector extends ClassDataCollector
      */
     private Annotation m_singleProperty; 
     
+
+    private Set<ComponentProperty> m_componentProperties = new HashSet<>();
+
+
     /**
      * List of all possible DM components.
      */
@@ -159,9 +255,10 @@ public class AnnotationCollector extends ClassDataCollector
      * Makes a new Collector for parsing a given class.
      * @param reporter the object used to report logs.
      */
-    public AnnotationCollector(Logger reporter, MetaType metaType)
+    public AnnotationCollector(Logger reporter, Analyzer analyzer, MetaType metaType)
     {
         m_logger = reporter;
+        m_analyzer = analyzer;
         m_metaType = metaType;
     }
     
@@ -354,7 +451,27 @@ public class AnnotationCollector extends ClassDataCollector
         else if (annotation.getName().getFQN().equals(A_PROPERTY))
         {
         	m_singleProperty = annotation;
-        }       
+        } else {
+            parseMetaAnnotations(annotation);
+        }
+    }
+
+    private void parseMetaAnnotations(Annotation annotation)
+    {
+        Clazz annotationClass;
+        try {
+            annotationClass = m_analyzer.findClass(annotation.getName());
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                "Annotation class " + annotation.getName() + " not found in class " + m_componentClassName, e);
+        }
+
+        try {
+            annotationClass.parseClassFileWithCollector(new MetaAnnotationCollector(annotation));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to parse annotation class " + annotation.getName()
+                + " using MetaAnnotationCollector in class " + m_componentClassName);
+        }
     }
 
     /**
@@ -408,6 +525,25 @@ public class AnnotationCollector extends ClassDataCollector
         
         if (m_singleProperty != null) {
             parseProperty(m_singleProperty, componentWriter);
+        }
+
+        if (!m_componentProperties.isEmpty()) {
+            JSONObject properties = componentWriter.getJsonObject(EntryParam.properties);
+            if (properties == null) {
+                properties = new JSONObject();
+            }
+
+            try {
+                for (ComponentProperty componentProperty : m_componentProperties) {
+                    addProperty(properties, componentProperty.name, componentProperty.value, componentProperty.classType);
+                    if (properties.length() > 0) {
+                        componentWriter.putJsonObject(EntryParam.properties, properties);
+                    }
+                }
+            } catch (JSONException e) {
+                throw new IllegalArgumentException("Unexpected exception while parsing Property from class " + m_componentClassName, e);
+            }
+
         }
     }
 

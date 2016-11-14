@@ -63,11 +63,11 @@ import java.lang.annotation.Target;
  * }
  * </pre>
  * </blockquote>
- * 
+ *
  * @author <a href="mailto:dev@felix.apache.org">Felix Project Team</a>
  */
 @Retention(RetentionPolicy.CLASS)
-@Target( { ElementType.TYPE, ElementType.ANNOTATION_TYPE })
+@Target( { ElementType.TYPE, ElementType.ANNOTATION_TYPE, ElementType.METHOD })
 @Repeatable(RepeatableProperty.class)
 public @interface Property
 {
